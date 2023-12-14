@@ -1,14 +1,19 @@
 body{
     font-family: serif;
     font-size:18px;
+    line-height: 1.4;
     margin: 40px auto;
     max-width: 820px;
-    background: #FFFFFF;
+    background: #EEEEEE;
     padding:0 20px
     color: #333;
 }
 
 .abstract { font-weight: bold; }
+
+h1,h2,h3{
+  line-height: 1.2;
+}
 
 a {
     color: #333;
