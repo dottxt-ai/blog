@@ -1,10 +1,15 @@
+media (prefers-color-scheme: dark){
+  body {
+    background:#000
+  }
+}
+
 body{
     font-family: serif;
     font-size:18px;
     line-height: 1.4;
     margin: 40px auto;
     max-width: 820px;
-    background: #EEEEEE;
     padding:0 20px
     color: #333;
 }
