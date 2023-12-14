@@ -1,0 +1,49 @@
+media (prefers-color-scheme: dark){
+  body {
+    background:#000
+  }
+}
+
+body{
+    font-family: serif;
+    font-size:18px;
+    line-height: 1.4;
+    margin: 40px auto;
+    max-width: 650;
+    padding:0 20px;
+    color: #333;
+}
+
+.abstract { font-weight: bold; }
+
+h1,h2,h3{
+  line-height: 1.2;
+}
+
+a {
+    color: #333;
+    text-decoration: underline;
+    font-weight: bold;
+}
+a[target="_blank"] { font-weight: normal; }
+
+/* Styling code blocks and their outputs */
+pre {
+  display: block;
+  background: #2E3440;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+  overflow-x: auto;
+  max-width: 100%;
+  min-width: 100px;
+  padding: 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #dcdccc; /* Zenburn specific */
+}
+
+pre.example {
+  background: #ECEFF4;
+  font-size: 13px;
+  color: #5E81AC;
+}
