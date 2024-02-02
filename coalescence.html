@@ -1,0 +1,468 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2024-02-02 Fri 16:31 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Coalescence: making LLM inference 5x faster</title>
+<meta name="generator" content="Org mode" />
+<meta name="author" content="dottxt, Inc." />
+<link rel="stylesheet" type="text/css" href="style.css" /><script data-goatcounter='https://dottxt-blog.goatcounter.com/count' async src='//gc.zgo.at/count.js'></script>
+</head>
+<body>
+<div id="content">
+<h1 class="title">Coalescence: making LLM inference 5x faster</h1>
+<p>
+In this post we’re going to explore a surprising property of <b><b>structured generation</b></b> when working with Large Language Models (LLMs): <i>generating structured output from an LLM can be significantly <b><b>faster</b></b> than generating unstructured text</i>. Specifically we’re going to explore a concept we call “coalescence” in structured generation. <b><b>Coalescence</b></b> is a framework for exploiting deterministic structures in our desired output in order to skip expensive and unnecessarily calls to the underlying LLM.
+</p>
+
+<div id="outline-container-orgc4d4bb1" class="outline-2">
+<h2 id="orgc4d4bb1">Structured Generation in Outlines</h2>
+<div class="outline-text-2" id="text-orgc4d4bb1">
+<p>
+<a href="https://github.com/outlines-dev/outlines">Outlines</a> allows you to use Large Language Models (LLMs) to output <i>structured</i> text. Being “structured” means that the output is guaranteed to adhere to a desired format such as:
+</p>
+
+<ul class="org-ul">
+<li>regular expressions - for example, making sure the output is a valid email address.</li>
+<li>JSON Schema -  ensuring you have well formed JSON with the fields you specify to allow easy interoperability with code.</li>
+<li>a Context-Free Grammar - for instance making sure the output is valid SQL</li>
+</ul>
+
+<p>
+If you have tried <a href="https://github.com/outlines-dev/outlines">Outlines</a>, you already know that it is fast: the <a href="https://arxiv.org/abs/2307.09702">method we use for structured generation</a> comes at virtually no cost during inference. Generating structured text is free, taking no more time than vanilla, unstructured generation from the model.
+</p>
+
+<p>
+But we, at <a href="https://dottxt.co">.txt</a>, did not stop there. In this blog post we will show you how we can improve upon this, and <b>make structured generation dramatically faster than vanilla generation.</b>
+</p>
+</div>
+
+
+<div id="outline-container-org97ecc0c" class="outline-3">
+<h3 id="org97ecc0c">Problem: Generating valid JSON</h3>
+<div class="outline-text-3" id="text-org97ecc0c">
+<p>
+LLMs are a lot more useful if we can reliably use their output in other parts of our programs. Say we want the language model to generate a JSON object that represents a character in a story. Our character needs to have a name and an age, contained in the “name” and “age” fields of the JSON respectively. To simplify the problem for the purpose of this article, we will restrict the number of possible names and ages. Here is how you would define this character using Pydantic:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #F0DFAF; font-weight: bold;">from</span> enum <span style="color: #F0DFAF; font-weight: bold;">import</span> Enum
+<span style="color: #F0DFAF; font-weight: bold;">from</span> pydantic <span style="color: #F0DFAF; font-weight: bold;">import</span> BaseModel
+
+<span style="color: #F0DFAF; font-weight: bold;">class</span> <span style="color: #7CB8BB;">Name</span>(<span style="color: #DCDCCC; font-weight: bold;">str</span>, Enum):
+    <span style="color: #DFAF8F;">john</span> = <span style="color: #CC9393;">"John"</span>
+    <span style="color: #DFAF8F;">paul</span> = <span style="color: #CC9393;">"Paul"</span>
+
+<span style="color: #F0DFAF; font-weight: bold;">class</span> <span style="color: #7CB8BB;">Age</span>(<span style="color: #DCDCCC; font-weight: bold;">int</span>, Enum):
+    <span style="color: #DFAF8F;">twenty</span> = 20
+    <span style="color: #DFAF8F;">thirty</span> = 30
+
+<span style="color: #F0DFAF; font-weight: bold;">class</span> <span style="color: #7CB8BB;">Character</span>(BaseModel):
+    name: Name
+    age: Age
+</pre>
+</div>
+
+<p>
+We can use Outlines to use any open source language model to generate story characters, here’s an example using Mistral-7B-v0.1:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #F0DFAF; font-weight: bold;">from</span> outlines <span style="color: #F0DFAF; font-weight: bold;">import</span> models, generate
+
+<span style="color: #DFAF8F;">model</span> = models.transformers(<span style="color: #CC9393;">"mistralai/Mistral-7B-v0.1"</span>)
+<span style="color: #DFAF8F;">generator</span> = generate.json(model, Character)
+
+<span style="color: #DFAF8F;">char</span> = generator(<span style="color: #CC9393;">"Generate a young character named Paul."</span>)
+<span style="color: #F0DFAF; font-weight: bold;">print</span>(char)
+<span style="color: #5F7F5F;"># </span><span style="color: #7F9F7F;">Character(name:"Paul", age:20)</span>
+</pre>
+</div>
+
+<p>
+Using <code>generate.json</code> is just as fast as if you’d let the model generate text freely, except the structure of the output is <b>guaranteed.</b> To understand how we can make this generation substantially faster we need to dive into the internals of Outlines.
+</p>
+</div>
+
+<div id="outline-container-orgbdf4bdf" class="outline-4">
+<h4 id="orgbdf4bdf">Converting JSON to a regular expression</h4>
+<div class="outline-text-4" id="text-orgbdf4bdf">
+<p>
+The first step in our process is to transform our JSON schema into a regular expression. As we’ll see in a bit, regular expressions are a big part of making structured generation fast. When you pass a Pydantic object to <a href="https://github.com/outlines-dev/outlines">Outlines</a> it first translates it to a <a href="https://json-schema.org/">JSON Schema</a> specification:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #DFAF8F;">json_schema</span> = Character.model_json_schema()
+json_schema
+</pre>
+</div>
+
+
+<div class="org-src-container">
+<pre class="src src-json">{'$defs': {'Age': {'enum': [20, 30], 'title': 'Age', 'type': 'integer'},
+  'Name': {'enum': ['John', 'Paul'], 'title': 'Name', 'type': 'string'}},
+ 'properties': {'name': {'$ref': '#/$defs/Name'},
+  'age': {'$ref': '#/$defs/Age'}},
+ 'required': ['name', 'age'],
+ 'title': 'Character',
+ 'type': 'object'}
+</pre>
+</div>
+
+<p>
+This JSON Schema specification is further transformed into a regular expression. If a string produced by the model matches this regular expression then we know it is valid to the JSON Schema specification, and thus parseable by Pydantic.
+</p>
+
+<p>
+Here’s how it works in Outlines:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #F0DFAF; font-weight: bold;">import</span> json
+
+<span style="color: #DFAF8F;">regex_str</span> = fsm.json_schema.build_regex_from_object(json.dumps(json_schema))
+regex_str
+</pre>
+</div>
+
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #9FC59F;">'\\\\{"name":("John"|"Paul"),"age":(20|30)\\\\}'</span>
+</pre>
+</div>
+
+<p>
+Next we’re going to use this regular expression to help us control our structured generation.
+</p>
+
+<p>
+<b>Note:</b> Technically, all possible valid JSON schemas cannot be represented with a regular expression, but in most cases approximating with a regular expression is enough.
+</p>
+</div>
+</div>
+
+<div id="outline-container-org079f161" class="outline-4">
+<h4 id="org079f161">Translating our JSON regex into a Finite State Machine</h4>
+<div class="outline-text-4" id="text-org079f161">
+<p>
+The secret behind the speed of structured generation in <a href="https://github.com/outlines-dev/outlines">Outlines</a> is the well-known equivalence between regular expressions and finite-state machines (FSM). To understand how this works, we need to transform our JSON regex into an FSM.
+</p>
+
+<p>
+We use the <code>interegular</code> library to perform this translation from the regular expressions that represents JSON Schemas into a Finite-State Machine. Here is a visualization of the the FSM the is output from this process (don’t worry about the details, we’ll zoom in soon):
+</p>
+
+
+<div class="figure">
+<p><img src="images/fsm_json_characters.png" alt="fsm_json_characters.png" width="100%" />
+</p>
+</div>
+
+<p>
+We can generate valid JSON from this FSM using the following procedure
+</p>
+
+<ol class="org-ol">
+<li>Start from state 0.</li>
+<li>Generate one of the <b>allowed</b> transition characters at random.</li>
+<li>Follow the corresponding transition to the new state</li>
+<li>Repeat until you’ve reached one of the FSM’s final states (in this case, only state 27).</li>
+</ol>
+
+<p>
+Following this procedure, no matter what paths we follow in the FSM, the string you’ve just generated is valid!
+</p>
+
+<p>
+At this point we have our JSON represented as an FSM and all we have to do is keep track of our current state and we can control sampling at virtually no additional cost.
+</p>
+</div>
+</div>
+</div>
+
+<div id="outline-container-org1451434" class="outline-3">
+<h3 id="org1451434">Towards Coalescence: Naive Character Merging.</h3>
+<div class="outline-text-3" id="text-org1451434">
+<p>
+Now we can explore the first pass at improving structured generation using a technique that is a first step towards coalescence. If we look at part of the above FSM something should become immediately obvious:
+</p>
+
+
+<div class="figure">
+<p><img src="images/fsm_json_characters_zoom.png" alt="fsm_json_characters_zoom.png" width="100%" />
+</p>
+</div>
+
+<p>
+Look how many of those states only have one possibility for transition! Recall that we’re using the FSM to limit our choices for sampling from the model, the number of transitions out of a state represents the possible values we can sample from. If there is only <i>one</i> value there is <b>no need to sample!</b>
+</p>
+
+<p>
+This leads to an obvious optimization: if we compress nodes that have one transition, we can skip that sampling step. This would lead to a new FSM that looks like this:
+</p>
+
+
+<div class="figure">
+<p><img src="images/fsm_json_characters_compressed.png" alt="fsm_json_characters_compressed.png" width="100%" />
+</p>
+</div>
+
+<p>
+It looks like we’ve simplified our model a lot and discovered a great method to speed up generation! Unfortunately there is one important part of working with LLMs we’ve left out: LLMs don’t use single characters, but instead use tokens. It turns out this introduces more nuance that can have dramatic consequence on the quality of the generation. Thinking in terms of characters will likely lead us down the wrong path.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgbe1de66" class="outline-3">
+<h3 id="orgbe1de66">LLMs work with Tokens</h3>
+<div class="outline-text-3" id="text-orgbe1de66">
+<p>
+So far all of our examples have been with regular expression looking at <i>individual characters.</i> This makes for easy examples, but doesn’t quite match up to what’s happening inside an LLM. LLMs are not trained character by character. Instead they use fragments of words (including whole words and individual characters) known as <i>tokens</i>. The above Finite-State Machine is thus not very useful when we try to generate text with an LLM.
+</p>
+</div>
+
+<div id="outline-container-org51cff82" class="outline-4">
+<h4 id="org51cff82">Adapting Character Regex to Work with Tokens</h4>
+<div class="outline-text-4" id="text-org51cff82">
+<p>
+Fortunately, it turns out you can deterministically transform this character-based FSM into another FSM that works with tokens instead. The following code gives an example of how this can be accomplished in <a href="https://github.com/outlines-dev/outlines">Outlines</a>:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #F0DFAF; font-weight: bold;">from</span> outlines.fsm.regex <span style="color: #F0DFAF; font-weight: bold;">import</span> make_deterministic_fsm, create_fsm_index_tokenizer
+
+<span style="color: #DFAF8F;">new_fsm</span>, <span style="color: #DFAF8F;">_</span> = make_deterministic_fsm(fsm)
+<span style="color: #DFAF8F;">index</span>, <span style="color: #DFAF8F;">_</span> = create_fsm_index_tokenizer(new_fsm, tokenizer)
+</pre>
+</div>
+
+<p>
+The <code>index</code> object is a dictionary that maps the states of the finite state machines to possible transitions; the transitions are represented as a dictionary that maps the allowed tokens to the next state of the FSM we need to be should we sample this token.
+</p>
+
+<p>
+The procedure to generate the first token is:
+</p>
+
+<ol class="org-ol">
+<li>Pass the prompt to the model, get the next-token probability distribution.</li>
+<li>Start the FSM in state 0. List all the tokens that correspond to a valid transition with <code>index[0].keys()</code>.</li>
+<li>Use the probability distribution to sample one of these tokens, say <code>X</code>.</li>
+<li>Follow the transition that corresponds to this token and move to the corresponding state with <code>new_state = index[0]["X"]</code></li>
+</ol>
+
+<p>
+Let's take a look at this index, and translate the token ids to tokens to understand what is going on:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #DFAF8F;">index_with_tokens</span> = {}
+<span style="color: #F0DFAF; font-weight: bold;">for</span> state, transitions <span style="color: #F0DFAF; font-weight: bold;">in</span> index.items():
+    <span style="color: #DFAF8F;">transitions</span> = {
+        tokenizer.tokenizer.decode([key]): value <span style="color: #F0DFAF; font-weight: bold;">for</span> key, value <span style="color: #F0DFAF; font-weight: bold;">in</span> transitions.items()
+    }
+    <span style="color: #DFAF8F;">index_with_tokens</span>[state] = transitions
+
+<span style="color: #F0DFAF; font-weight: bold;">for</span> state, transitions <span style="color: #F0DFAF; font-weight: bold;">in</span> index_with_tokens.items():
+    <span style="color: #F0DFAF; font-weight: bold;">print</span>(f<span style="color: #CC9393;">"{state}: {transitions}"</span>)
+</pre>
+</div>
+
+<div class="org-src-container">
+<pre class="src src-python">0: {<span style="color: #CC9393;">'{'</span>: 1, <span style="color: #CC9393;">'{"'</span>: 2}
+1: {<span style="color: #CC9393;">'"'</span>: 2}
+2: {<span style="color: #CC9393;">'na'</span>: 4, <span style="color: #CC9393;">'nam'</span>: 5, <span style="color: #CC9393;">'name'</span>: 6, <span style="color: #CC9393;">'n'</span>: 3}
+3: {<span style="color: #CC9393;">'a'</span>: 4, <span style="color: #CC9393;">'ame'</span>: 6, <span style="color: #CC9393;">'am'</span>: 5}
+4: {<span style="color: #CC9393;">'me'</span>: 6, <span style="color: #CC9393;">'m'</span>: 5}
+5: {<span style="color: #CC9393;">'e'</span>: 6}
+6: {<span style="color: #CC9393;">'"'</span>: 7, <span style="color: #CC9393;">'":'</span>: 8, <span style="color: #CC9393;">'":"'</span>: 9}
+7: {<span style="color: #CC9393;">':'</span>: 8, <span style="color: #CC9393;">':"'</span>: 9}
+8: {<span style="color: #CC9393;">'"'</span>: 9}
+9: {<span style="color: #CC9393;">'P'</span>: 11, <span style="color: #CC9393;">'Paul'</span>: 14, <span style="color: #CC9393;">'Pa'</span>: 12, <span style="color: #CC9393;">'J'</span>: 10, <span style="color: #CC9393;">'Jo'</span>: 26, <span style="color: #CC9393;">'John'</span>: 14}
+10: {<span style="color: #CC9393;">'o'</span>: 26, <span style="color: #CC9393;">'oh'</span>: 27, <span style="color: #CC9393;">'ohn'</span>: 14}
+11: {<span style="color: #CC9393;">'au'</span>: 13, <span style="color: #CC9393;">'a'</span>: 12, <span style="color: #CC9393;">'aul'</span>: 14}
+12: {<span style="color: #CC9393;">'ul'</span>: 14, <span style="color: #CC9393;">'u'</span>: 13}
+13: {<span style="color: #CC9393;">'l'</span>: 14}
+14: {<span style="color: #CC9393;">'","'</span>: 17, <span style="color: #CC9393;">'",'</span>: 16, <span style="color: #CC9393;">'"'</span>: 15}
+15: {<span style="color: #CC9393;">',"'</span>: 17, <span style="color: #CC9393;">','</span>: 16}
+16: {<span style="color: #CC9393;">'"'</span>: 17}
+17: {<span style="color: #CC9393;">'age'</span>: 20, <span style="color: #CC9393;">'a'</span>: 18, <span style="color: #CC9393;">'ag'</span>: 19}
+18: {<span style="color: #CC9393;">'g'</span>: 19, <span style="color: #CC9393;">'ge'</span>: 20}
+19: {<span style="color: #CC9393;">'e'</span>: 20}
+20: {<span style="color: #CC9393;">'"'</span>: 21, <span style="color: #CC9393;">'":'</span>: 22}
+21: {<span style="color: #CC9393;">':'</span>: 22}
+22: {<span style="color: #CC9393;">'20'</span>: 24, <span style="color: #CC9393;">'2'</span>: 23, <span style="color: #CC9393;">'3'</span>: 23, <span style="color: #CC9393;">'30'</span>: 24}
+23: {<span style="color: #CC9393;">'0'</span>: 24}
+24: {<span style="color: #CC9393;">'}'</span>: 25}
+26: {<span style="color: #CC9393;">'hn'</span>: 14, <span style="color: #CC9393;">'h'</span>: 27}
+27: {<span style="color: #CC9393;">'n'</span>: 14}
+</pre>
+</div>
+
+<p>
+Numbers represent the states of the FSM, and strings the tokens in the model’s vocabulary.  We can also visualize this entire FSM, it’s quite a bit more complex than our first one.
+</p>
+
+
+
+<div class="figure">
+<p><img src="images/fsm_json_tokens.png" alt="fsm_json_tokens.png" width="100%" />
+</p>
+</div>
+
+<p>
+Despite this added complexity, walking through this is just as easy as in our original generation example.
+</p>
+
+<p>
+It’s essential to note that <i>each transition</i> in our FSM represents a <i>expensive call to the LLM</i>. In vanilla generation all of these calls would also be necessary. Our use of FSMs to represent regular expressions means controlling the output requires virtually no additional cost over vanilla generation. However, we don’t have to settle with simply no added cost: with structured generation we have the potential for much faster generation if we can figure out a way to skip calls to the LLM.
+</p>
+</div>
+</div>
+</div>
+</div>
+
+<div id="outline-container-orge84ea2e" class="outline-2">
+<h2 id="orge84ea2e">Coalescence</h2>
+<div class="outline-text-2" id="text-orge84ea2e">
+<p>
+Let us zoom in on the paths from 2→ 6 in the previous image. Each of these transitions represents possible valid sequence of transitions that can lead from stage 2 to stage 6. There are 8 paths in total, but they <i>all result in the same generated string:</i> “name”.
+</p>
+
+
+<div class="figure">
+<p><img src="images/fsm_json_tokens_zoom.png" alt="fsm_json_tokens_zoom.png" width="100%" />
+</p>
+</div>
+
+
+<p>
+Eight paths to get to the same generation, doesn’t that sound redundant? It does, and these redundancies necessarily occur because of the way tokenizers are trained. This <a href="https://huggingface.co/learn/nlp-course/chapter6/2">blog post</a> (+ video) are a good introduction to the details for those who are curious. But it suffices to say that  if <code>{"</code> is in the vocabulary then <code>{</code> and <code>"</code> necessarily are as well.
+</p>
+</div>
+
+<div id="outline-container-org9de90d0" class="outline-3">
+<h3 id="org9de90d0">A 5x speedup</h3>
+<div class="outline-text-3" id="text-org9de90d0">
+<p>
+We can however exploit this structure of the FSM to dramatically accelerate generation: instead of making expensive calls to the LLM for each transition, we can decide instead to append either of the following token <b>words</b> to the currently generated sequence:
+</p>
+
+<ul class="org-ul">
+<li>[”name”]</li>
+<li>[”n”, “a”, “m”, “e”]</li>
+<li>[”na”, “m”, “e”]</li>
+<li>[”nam”, “e”]</li>
+<li>[”n”, “am”, “e”]</li>
+<li>[”n”, “ame”]</li>
+<li>[”na”, “me”]</li>
+<li>[”n”, “a”, “me”]</li>
+</ul>
+
+<p>
+For the sake of simplicity, let’s show what happens if we always append the longest token, or equivalently shortest word. In our toy example (and only!) this translates to the following rule:
+</p>
+
+<blockquote>
+<p>
+When, in a given transition, several tokens share the same prefix, only keep the transition that corresponds to the longest one
+</p>
+</blockquote>
+
+
+<p>
+Let’s apply this rule by hand and see the result:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-python"><span style="color: #DFAF8F;">simplified_index</span> = {
+    0: {<span style="color: #CC9393;">'{"'</span>: 2},
+    2: {<span style="color: #CC9393;">"name"</span>: 6},
+    6: {<span style="color: #CC9393;">'":"'</span>: 9},
+    9: {<span style="color: #CC9393;">'Paul'</span>: 14, <span style="color: #CC9393;">'John'</span>: 14},
+    14: {<span style="color: #CC9393;">'","'</span>: 17},
+    17: {<span style="color: #CC9393;">'age'</span>: 20},
+    20: {<span style="color: #CC9393;">'":'</span>: 22},
+    22: {<span style="color: #CC9393;">'20'</span>: 24, <span style="color: #CC9393;">'30'</span>: 24},
+    24: {<span style="color: #CC9393;">'}'</span>: 25},
+}
+</pre>
+</div>
+
+<p>
+Out of 9 tokens in the answer, all except two states are single-state transitions. So here we only need to call the model twice, and directly append the other tokens.
+</p>
+
+<blockquote>
+<p>
+<b>That's at least a 5x speedup over structured generation in Outlines, where the model needs to consider every possible transition. Because structured generation in Outlines incurs no additional cost over vanilla generation, this means we ultimate have a 5x speed up over vanilla generation from the model.</b>
+</p>
+</blockquote>
+</div>
+</div>
+
+<div id="outline-container-org93fe427" class="outline-3">
+<h3 id="org93fe427">What's in a “name”?</h3>
+<div class="outline-text-3" id="text-org93fe427">
+<p>
+All these paths lead to the same <i>string</i> and the same speedup, however they lead to potentially <i>very different</i> states for the LLM when fit reaches state 6. That is, the strings are the same, but <i>each path</i> leads to a different conditional probability distribution in stage 6.
+</p>
+
+<p>
+Suppose that we are not just interested in generating a random story character, but correctly identifying either “Paul” or “John” for a named entity extraction task. Depending on the token word you choose to append, the subsequent probability of picking either “John” or “Paul” may be completely different:
+</p>
+
+
+<div class="figure">
+<p><img src="images/fsm_json_tokens_path_probabilities.png" alt="fsm_json_tokens_path_probabilities.png" width="100%" />
+</p>
+</div>
+
+<p>
+When we generate text with a Large Language Model, we are sampling from a distribution over <i>possible sequences</i>. The set of all possible sequence (very, very big) is called the support of this distribution. When we do structured generation, we are limiting the support of this distribution since we are forbidding sequences that do not respect the structure. When we make a choice as to which token word to append, we are further restricting the number of possible sequences.
+</p>
+
+<p>
+When we optimize the generation process we should always ask ourselves: are we preventing more likely sequences from being generated?
+</p>
+</div>
+</div>
+</div>
+
+<div id="outline-container-orgb138ca9" class="outline-2">
+<h2 id="orgb138ca9">Conclusion</h2>
+<div class="outline-text-2" id="text-orgb138ca9">
+<p>
+More than speedups, coalescence provides a framework. We still have access to all possible paths, and we still have a choice regarding which we want to append. Used with the right sampling algorithm, coalescence allows us to avoid the pitfalls of simpler, destructive, methods like Guidance’s acceleration or the character-based optimization we introduced above. Furthermore, because we work with tokens we avoid the <a href="https://towardsdatascience.com/the-art-of-prompt-design-prompt-boundaries-and-token-healing-3b2448b0be38">prompt boundary problem</a>: tokens are only merged when there is no ambiguity.
+</p>
+
+<p>
+As experienced Bayesian modelers, the .txt team is well aware that there is often a lot of nuance in correctly sampling from these distributions than it seems at first pass. Properly framing the problem means that as we learn more about the properties of these models we’ll be able to deliver both <b>speed</b> and <b>quality</b> in our results.
+</p>
+
+<p>
+Speed is great, less so when it comes at the expense of correctness. At .txt we don't churn out tokens, we engineer them.
+</p>
+</div>
+</div>
+</div>
+<div id="postamble" class="status">
+<div id='mc_embed_shell'>
+                <div id='mc_embed_signup'>
+                <form action='https://dottxt.us12.list-manage.com/subscribe/post?u=aec344375257ff07dcf9a6ef6&amp;id=922982b042&amp;f_id=00db4ee0f0' method='post' id='mc-embedded-subscribe-form' name='mc-embedded-subscribe-form' class='validate' target='_self' novalidate=''>
+                        <div id='mc_embed_signup_scroll'><h2>Keep up with structured generation</h2>
+                        <div class='mc-field-group'><label for='mce-EMAIL'>Email Address </label><input type='email' name='EMAIL' class='required email' id='mce-EMAIL' required='' value=''><span id='mce-EMAIL-HELPERTEXT' class='helper_text'></span></div>
+                        <div id='mce-responses' class='clear'>
+                        <div class='response' id='mce-error-response' style='display: none;'></div>
+                        <div class='response' id='mce-success-response' style='display: none;'></div>
+                        </div><div aria-hidden='true' style='position: absolute; left: -5000px;'><input type='text' name='b_aec344375257ff07dcf9a6ef6_922982b042' tabindex='-1' value=''></div><div class='clear'><input type='submit' name='subscribe' id='mc-embedded-subscribe' class='button' value='Subscribe'></div>
+                </div>
+                </form>
+                </div>
+                </div>
+</div>
+</body>
+</html>
