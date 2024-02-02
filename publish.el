@@ -86,7 +86,7 @@
         ; The website's assets
         ("assets"
         :base-directory "assets"
-        :base-extension "any"
+        :base-extension any
         :publishing-directory "_public/"
         :recursive t
         :publishing-function org-publish-attachment
