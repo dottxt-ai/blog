@@ -3,6 +3,8 @@
 
 In this post we’re going to explore a surprising property of **structured generation** when working with Large Language Models (LLMs): /generating structured output from an LLM can be significantly **faster** than generating unstructured text/. Specifically we’re going to explore a concept we call “coalescence” in structured generation. **Coalescence** is a framework for exploiting deterministic structures in our desired output in order to skip expensive and unnecessarily calls to the underlying LLM.
 
+#+toc: headlines 2
+
 * Structured Generation in Outlines
 
 [[https://github.com/outlines-dev/outlines][Outlines]] allows you to use Large Language Models (LLMs) to output /structured/ text. Being “structured” means that the output is guaranteed to adhere to a desired format such as:
