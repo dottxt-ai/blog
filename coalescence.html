@@ -3,7 +3,7 @@
 "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
 <head>
-<!-- 2024-02-09 Fri 12:53 -->
+<!-- 2024-02-19 Mon 13:23 -->
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Coalescence: making LLM inference 5x faster</title>
@@ -22,27 +22,27 @@ In this post we’re going to explore a surprising property of <b><b>structured 
 <h2>Table of Contents</h2>
 <div id="text-table-of-contents">
 <ul>
-<li><a href="#org7f4ffdf">Structured Generation in Outlines</a>
+<li><a href="#org6031716">Structured Generation in Outlines</a>
 <ul>
-<li><a href="#orga29ac6c">Problem: Generating valid JSON</a></li>
-<li><a href="#org6b49555">Towards Coalescence: Naive Character Merging.</a></li>
-<li><a href="#org16f111e">LLMs work with Tokens</a></li>
+<li><a href="#org64e2389">Problem: Generating valid JSON</a></li>
+<li><a href="#org410f13f">Towards Coalescence: Naive Character Merging.</a></li>
+<li><a href="#org7fbef74">LLMs work with Tokens</a></li>
 </ul>
 </li>
-<li><a href="#org0a80dc4">Coalescence</a>
+<li><a href="#org3017c3e">Coalescence</a>
 <ul>
-<li><a href="#orgaf6d0be">A 5x speedup</a></li>
-<li><a href="#orgfd5b765">What's in a “name”?</a></li>
+<li><a href="#org176be13">A 5x speedup</a></li>
+<li><a href="#org819779b">What's in a “name”?</a></li>
 </ul>
 </li>
-<li><a href="#orgb7c7861">Conclusion</a></li>
+<li><a href="#orgedb09c1">Conclusion</a></li>
 </ul>
 </div>
 </div>
 
-<div id="outline-container-org7f4ffdf" class="outline-2">
-<h2 id="org7f4ffdf">Structured Generation in Outlines</h2>
-<div class="outline-text-2" id="text-org7f4ffdf">
+<div id="outline-container-org6031716" class="outline-2">
+<h2 id="org6031716">Structured Generation in Outlines</h2>
+<div class="outline-text-2" id="text-org6031716">
 <p>
 <a href="https://github.com/outlines-dev/outlines">Outlines</a> allows you to use Large Language Models (LLMs) to output <i>structured</i> text. Being “structured” means that the output is guaranteed to adhere to a desired format such as:
 </p>
@@ -63,9 +63,9 @@ But we, at <a href="https://dottxt.co">.txt</a>, did not stop there. In this blo
 </div>
 
 
-<div id="outline-container-orga29ac6c" class="outline-3">
-<h3 id="orga29ac6c">Problem: Generating valid JSON</h3>
-<div class="outline-text-3" id="text-orga29ac6c">
+<div id="outline-container-org64e2389" class="outline-3">
+<h3 id="org64e2389">Problem: Generating valid JSON</h3>
+<div class="outline-text-3" id="text-org64e2389">
 <p>
 LLMs are a lot more useful if we can reliably use their output in other parts of our programs. Say we want the language model to generate a JSON object that represents a character in a story. Our character needs to have a name and an age, contained in the “name” and “age” fields of the JSON respectively. To simplify the problem for the purpose of this article, we will restrict the number of possible names and ages. Here is how you would define this character using Pydantic:
 </p>
@@ -109,9 +109,9 @@ Using <code>generate.json</code> is just as fast as if you’d let the model gen
 </p>
 </div>
 
-<div id="outline-container-org0445519" class="outline-4">
-<h4 id="org0445519">Converting JSON to a regular expression</h4>
-<div class="outline-text-4" id="text-org0445519">
+<div id="outline-container-org7cfeddc" class="outline-4">
+<h4 id="org7cfeddc">Converting JSON to a regular expression</h4>
+<div class="outline-text-4" id="text-org7cfeddc">
 <p>
 The first step in our process is to transform our JSON schema into a regular expression. As we’ll see in a bit, regular expressions are a big part of making structured generation fast. When you pass a Pydantic object to <a href="https://github.com/outlines-dev/outlines">Outlines</a> it first translates it to a <a href="https://json-schema.org/">JSON Schema</a> specification:
 </p>
@@ -167,9 +167,9 @@ Next we’re going to use this regular expression to help us control our structu
 </div>
 </div>
 
-<div id="outline-container-org8874662" class="outline-4">
-<h4 id="org8874662">Translating our JSON regex into a Finite State Machine</h4>
-<div class="outline-text-4" id="text-org8874662">
+<div id="outline-container-org379eeea" class="outline-4">
+<h4 id="org379eeea">Translating our JSON regex into a Finite State Machine</h4>
+<div class="outline-text-4" id="text-org379eeea">
 <p>
 The secret behind the speed of structured generation in <a href="https://github.com/outlines-dev/outlines">Outlines</a> is the well-known equivalence between regular expressions and finite-state machines (FSM). To understand how this works, we need to transform our JSON regex into an FSM.
 </p>
@@ -206,9 +206,9 @@ At this point we have our JSON represented as an FSM and all we have to do is ke
 </div>
 </div>
 
-<div id="outline-container-org6b49555" class="outline-3">
-<h3 id="org6b49555">Towards Coalescence: Naive Character Merging.</h3>
-<div class="outline-text-3" id="text-org6b49555">
+<div id="outline-container-org410f13f" class="outline-3">
+<h3 id="org410f13f">Towards Coalescence: Naive Character Merging.</h3>
+<div class="outline-text-3" id="text-org410f13f">
 <p>
 Now we can explore the first pass at improving structured generation using a technique that is a first step towards coalescence. If we look at part of the above FSM something should become immediately obvious:
 </p>
@@ -239,17 +239,17 @@ It looks like we’ve simplified our model a lot and discovered a great method t
 </div>
 </div>
 
-<div id="outline-container-org16f111e" class="outline-3">
-<h3 id="org16f111e">LLMs work with Tokens</h3>
-<div class="outline-text-3" id="text-org16f111e">
+<div id="outline-container-org7fbef74" class="outline-3">
+<h3 id="org7fbef74">LLMs work with Tokens</h3>
+<div class="outline-text-3" id="text-org7fbef74">
 <p>
 So far all of our examples have been with regular expression looking at <i>individual characters.</i> This makes for easy examples, but doesn’t quite match up to what’s happening inside an LLM. LLMs are not trained character by character. Instead they use fragments of words (including whole words and individual characters) known as <i>tokens</i>. The above Finite-State Machine is thus not very useful when we try to generate text with an LLM.
 </p>
 </div>
 
-<div id="outline-container-org61b59b1" class="outline-4">
-<h4 id="org61b59b1">Adapting Character Regex to Work with Tokens</h4>
-<div class="outline-text-4" id="text-org61b59b1">
+<div id="outline-container-orgbad24ad" class="outline-4">
+<h4 id="orgbad24ad">Adapting Character Regex to Work with Tokens</h4>
+<div class="outline-text-4" id="text-orgbad24ad">
 <p>
 Fortunately, it turns out you can deterministically transform this character-based FSM into another FSM that works with tokens instead. The following code gives an example of how this can be accomplished in <a href="https://github.com/outlines-dev/outlines">Outlines</a>:
 </p>
@@ -348,9 +348,9 @@ It’s essential to note that <i>each transition</i> in our FSM represents a <i>
 </div>
 </div>
 
-<div id="outline-container-org0a80dc4" class="outline-2">
-<h2 id="org0a80dc4">Coalescence</h2>
-<div class="outline-text-2" id="text-org0a80dc4">
+<div id="outline-container-org3017c3e" class="outline-2">
+<h2 id="org3017c3e">Coalescence</h2>
+<div class="outline-text-2" id="text-org3017c3e">
 <p>
 Let us zoom in on the paths from 2→ 6 in the previous image. Each of these transitions represents possible valid sequence of transitions that can lead from stage 2 to stage 6. There are 8 paths in total, but they <i>all result in the same generated string:</i> “name”.
 </p>
@@ -367,9 +367,9 @@ Eight paths to get to the same generation, doesn’t that sound redundant? It do
 </p>
 </div>
 
-<div id="outline-container-orgaf6d0be" class="outline-3">
-<h3 id="orgaf6d0be">A 5x speedup</h3>
-<div class="outline-text-3" id="text-orgaf6d0be">
+<div id="outline-container-org176be13" class="outline-3">
+<h3 id="org176be13">A 5x speedup</h3>
+<div class="outline-text-3" id="text-org176be13">
 <p>
 We can however exploit this structure of the FSM to dramatically accelerate generation: instead of making expensive calls to the LLM for each transition, we can decide instead to append either of the following token <b>words</b> to the currently generated sequence:
 </p>
@@ -427,9 +427,9 @@ Out of 9 tokens in the answer, all except two states are single-state transition
 </div>
 </div>
 
-<div id="outline-container-orgfd5b765" class="outline-3">
-<h3 id="orgfd5b765">What's in a “name”?</h3>
-<div class="outline-text-3" id="text-orgfd5b765">
+<div id="outline-container-org819779b" class="outline-3">
+<h3 id="org819779b">What's in a “name”?</h3>
+<div class="outline-text-3" id="text-org819779b">
 <p>
 All these paths lead to the same <i>string</i> and the same speedup, however they lead to potentially <i>very different</i> states for the LLM when it reaches state 6. That is, the strings are the same, but <i>each path</i> leads to a different conditional probability distribution in stage 6.
 </p>
@@ -455,9 +455,9 @@ When we optimize the generation process we should always ask ourselves: are we p
 </div>
 </div>
 
-<div id="outline-container-orgb7c7861" class="outline-2">
-<h2 id="orgb7c7861">Conclusion</h2>
-<div class="outline-text-2" id="text-orgb7c7861">
+<div id="outline-container-orgedb09c1" class="outline-2">
+<h2 id="orgedb09c1">Conclusion</h2>
+<div class="outline-text-2" id="text-orgedb09c1">
 <p>
 More than speedups, coalescence provides a framework. We still have access to all possible paths, and we still have a choice regarding which we want to append. Used with the right sampling algorithm, coalescence allows us to avoid the pitfalls of simpler, destructive, methods like Guidance’s acceleration or the character-based optimization we introduced above. Furthermore, because we work with tokens we avoid the <a href="https://towardsdatascience.com/the-art-of-prompt-design-prompt-boundaries-and-token-healing-3b2448b0be38">prompt boundary problem</a>: tokens are only merged when there is no ambiguity.
 </p>
@@ -476,8 +476,8 @@ Speed is great, less so when it comes at the expense of correctness. At .txt we 
 <div id='mc_embed_shell'>
                 <div id='mc_embed_signup'>
                 <form action='https://dottxt.us12.list-manage.com/subscribe/post?u=aec344375257ff07dcf9a6ef6&amp;id=922982b042&amp;f_id=00db4ee0f0' method='post' id='mc-embedded-subscribe-form' name='mc-embedded-subscribe-form' class='validate' target='_self' novalidate=''>
-                        <div id='mc_embed_signup_scroll'><h3>Keep up with structured generation</h3>
-                        <div class='mc-field-group'><label for='mce-EMAIL'>Email Address </label><input type='email' name='EMAIL' class='required email' id='mce-EMAIL' required='' value=''><span id='mce-EMAIL-HELPERTEXT' class='helper_text'></span></div>
+                        <div id='mc_embed_signup_scroll'><h2>Keep up with structured generation</h2>
+                        <div class='mc-field-group'><label for='mce-EMAIL'>Email Address </label><input type='email' name='EMAIL' class='required email' id='mce-EMAIL' required='' value=''><span id='mce-EMAIL-HELPERTEXT' class='helper_text'></span></div><div hidden=''><input type='hidden' name='tags' value='10676972'></div>
                         <div id='mce-responses' class='clear'>
                         <div class='response' id='mce-error-response' style='display: none;'></div>
                         <div class='response' id='mce-success-response' style='display: none;'></div>
