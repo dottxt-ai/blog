@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2024-03-15 Fri 09:22 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Structured Generation Improves LLM performance: GSM8K Benchmark</title>
+<meta name="generator" content="Org mode" />
+<meta name="author" content="dottxt, Inc." />
+<link rel="stylesheet" type="text/css" href="style.css" /><script data-goatcounter='https://dottxt-blog.goatcounter.com/count' async src='//gc.zgo.at/count.js'></script>
+</head>
+<body>
+<a href="index.html">HOME</a> | <a href="http://dottxt.co">.TXT WEBSITE</a><div id="content">
+<h1 class="title">Structured Generation Improves LLM performance: GSM8K Benchmark</h1>
+<p>
+In this post we run an series of experiments that find that <b>structured generation</b> in Large Language Models (LLMs) leads to a consistent and often substantial improvement in model performance on the GSM8K evaluation set.
+</p>
+
+<p>
+Key findings include:
+</p>
+
+<ul class="org-ul">
+<li>Across 8 different models, using structured generation can lead to a greater than 70% lift in performance and in all cases led to improvement in performance over unstructured generation.</li>
+<li>Additionally we find evidence previously unexplored benefits of structured generation: “prompt consistency” and “thought-control”.</li>
+<li>Even if structured output from an LLM is not essential to a project, structured generation is still worth using in your model for its performance benefits.</li>
+</ul>
+
+<div id="outline-container-org6e24c52" class="outline-2">
+<h2 id="org6e24c52">Experimental Setup</h2>
+<div class="outline-text-2" id="text-org6e24c52">
+<p>
+In order to test the impact of structured generation on the quality of LLM output we ran the GSM8K test set evaluations of 1319 grade school math word problems on 8 different models. We use a <a href="https://github.com/EleutherAI/lm-evaluation-harness/blob/cc771ecac8964f0afab76e95e264e69528430ff2/lm_eval/tasks/gsm8k/gsm8k-cot.yaml#L8">standardized 8-shot prompt</a> used by the <a href="https://github.com/EleutherAI/lm-evaluation-harness">EleutherAI LM Evaluation Harness</a>. We compared the result of parsing the unstructured output, closely replicating the behavior of the LM Evaluation Harness, with controlling the output using regex structured generation with <a href="https://github.com/outlines-dev/outlines">Outlines</a>.
+</p>
+</div>
+
+<div id="outline-container-org75afc0b" class="outline-3">
+<h3 id="org75afc0b">Structure of GSM8K Questions and Answers</h3>
+<div class="outline-text-3" id="text-org75afc0b">
+<p>
+The GSM8K question/answers, despite not having an obvious format, do indeed contain a clear structure as we can see in the visualization below in one of the example questions from the 8-shot prompt:
+</p>
+
+
+<div class="figure">
+<p><img src="images/gsm8k_regex.png" alt="gsm8k_regex.png" width="100%" />
+</p>
+</div>
+
+<p>
+One of the challenges when running evaluations is correctly parsing the output of the model. As you can see in the image, we can create a regex to match this inherent structure in the GSM8K data. A <a href="https://github.com/EleutherAI/lm-evaluation-harness/blob/e74ec966556253fbe3d8ecba9de675c77c075bce/lm_eval/tasks/gsm8k/gsm8k-cot.yaml#L41">regex much like this one</a> is used in the EleutherAI lm-evaluation-harness.
+</p>
+
+<p>
+However <b>structured generation</b> can use this very regex not just to <b>parse</b> an output, but rather to guarantee the <b>output adhere to this structure</b>. This means that when using structured generation we never have to worry about whether or not we will be able to correctly parse the answer.
+</p>
+</div>
+</div>
+</div>
+
+<div id="outline-container-orgf017347" class="outline-2">
+<h2 id="orgf017347">Results</h2>
+<div class="outline-text-2" id="text-orgf017347">
+<p>
+The results of our experiments show that <b>structured generation consistently improves model performance.</b> This effect is particularly strong in under-performing models where structured generation can, in cases such as EleutherAI/gpt-j-6b, more than <b>double</b> performance (although, admittedly, it's not that impressive given the base score). Additionally performance gains were seen even in models specifically tuned to this task like Pearl-7B-slerp and MetaMath-Tulpar-7b-V2-slerp. These improvements can be seen in the visualization below:
+</p>
+
+
+<div class="figure">
+<p><img src="images/gsm8k_results.png" alt="gsm8k_results.png" width="100%" />
+</p>
+</div>
+
+<p>
+In all cases there is performance improvement seen from using structured generation and in all but the top performing model, the improvement is greater than 10%.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgda2b985" class="outline-2">
+<h2 id="orgda2b985">JSON Structuring</h2>
+<div class="outline-text-2" id="text-orgda2b985">
+<p>
+By exploiting the inherent structure in the GSM8K benchmark prompt we were able to achieve consistent improvements across all models. Another reasonable approach to dealing with structure would be to <b>better structure the prompt itself</b>. JSON is a common format for structured data that allows us to easily use our model with other code (including our evaluation code). Because of it’s ubiquitous nature, it makes sense to reformat our original question, reasoning, answer data into JSON. Here is an example of the same questions reformatted into JSON.
+</p>
+
+
+<div class="figure">
+<p><img src="images/gsm8k_json.png" alt="gsm8k_json.png" width="100%" />
+</p>
+</div>
+
+<p>
+In the case of Mistral-7B-v0.1 we found that using this format in the prompt alone, <b>without</b> structured generation, resulted in a 17.5% lift over the baseline unstructured prompt performance using the first QA prompt, and an 8.2% lift over <b>even</b> <b>the structured</b> result for the QA prompt. However enforcing structure on the JSON formatted prompt provided an even <b>further</b> lift of 20.7% over baseline performance! The chart below visualizes these results:
+</p>
+
+
+<div class="figure">
+<p><img src="images/gsm8k_json_result.png" alt="gsm8k_json_result.png" width="100%" />
+</p>
+</div>
+
+<p>
+So even when the format of the prompt is able to dramatically improve bench mark performance, structured generation still leads to improved performance.
+</p>
+</div>
+
+<div id="outline-container-org7bf3d98" class="outline-3">
+<h3 id="org7bf3d98">Structured Generation for Prompt Consistency</h3>
+<div class="outline-text-3" id="text-org7bf3d98">
+<p>
+It turns out that <b>not</b> all models followed the above pattern where formatting the prompt as JSON improved unstructured results. MetaMath-Tulpar-7b-v2-Slerp had a <b>significant</b> <b>drop</b> in performance when the prompt was changed from the QA format to the JSON one, going from 63.4% accuracy to an abysmal 18.9% when using JSON.
+</p>
+
+<p>
+What is interesting is that when using structured generation on both formats the results were much more consistent achieving comparable performance of 73.8% and 71.1% accuracy for QA and JSON formats respectively. The results can are visualized below:
+</p>
+
+
+<div class="figure">
+<p><img src="images/gsm8k_consistency_result.png" alt="gsm8k_consistency_result.png" width="100%" />
+</p>
+</div>
+
+<p>
+This finding is particularly interesting in light of Sclar, et al’s <b><a href="https://arxiv.org/pdf/2310.11324.pdf">Quantifying Language Model’s Sensitivity to Spurious Features in Prompt Design</a>.</b> This paper found that small changes in prompt format can have major impacts on the evaluation results. Our findings suggest structured generation might provide a means of ensuring more consistent performance across variance in prompt format. This is an opportunity for future research; a useful experiment would be to revisit Scalr, et al and use structured generation to see if it consistently reduces variance in the evaluation benchmarks across prompts.
+</p>
+</div>
+</div>
+
+<div id="outline-container-org2ccfb41" class="outline-3">
+<h3 id="org2ccfb41">Thought-Control</h3>
+<div class="outline-text-3" id="text-org2ccfb41">
+<p>
+The standard prompt for the GSM8K evaluation set involves a reasoning step which allows the model to “think” before coming to its final conclusion. Wei, et al describe this method, in their paper <a href="https://arxiv.org/abs/2201.11903">Chain-of-Thought Prompting Elicits Reasoning in Large Language Models</a>, as “Chain-of-Thought” and demonstrate that empirically this produces better results, specifically using the GSM8K data set.
+</p>
+
+<p>
+In exploring the performance of different regular expressions we came across an unexpected, additional benefit of structured generation we call “Thought-control”.  Thought-control involves <b>limiting the number of characters the model has to “think”.</b> Our current structure is to allow a minimum of 50 characters and a maximum of 700 character for the reasoning stage. This was chosen after a discovery that even slightly smaller upper bounds, such as 300 and 500, saw less improvement (in some cases no improvement). Early evidence suggest that increasing the lower bound may further improve performance.
+</p>
+
+<p>
+Future work involves exploring the impact of thought-control on performance in more detail.
+</p>
+</div>
+</div>
+</div>
+
+<div id="outline-container-org30f3b20" class="outline-2">
+<h2 id="org30f3b20">Conclusion</h2>
+<div class="outline-text-2" id="text-org30f3b20">
+<p>
+The initial value proposition of structure generation was simply that it allows you to have predictable output when working with LLMs. This is essential if you want to create non-trivial programs that consume LLM output as their input.
+</p>
+
+<p>
+Our look at evaluating structured generations with GSM8K tells us that <b>even if you don’t care about structured output</b> you should still use structured generation as it will improve the performance of your models.
+</p>
+
+<p>
+Additionally, we’ve found some initial evidence that structured generation may offer even more benefits: reduced variance across changes to prompt formats and finer control over the Chain-of-Thought reasoning step.
+</p>
+
+<p>
+All of this combined points towards a future were structured generation is an <b>essential</b> part of working with LLMs.
+</p>
+
+<p>
+<a href="https://h1xbpbfsf0w.typeform.com/to/ZgBCvJHF">Sign up</a> for the private Beta of our upcoming product to get a glimpse of the future.
+</p>
+</div>
+</div>
+</div>
+<div id="postamble" class="status">
+<div id='mc_embed_shell'>
+                <div id='mc_embed_signup'>
+                <form action='https://dottxt.us12.list-manage.com/subscribe/post?u=aec344375257ff07dcf9a6ef6&amp;id=922982b042&amp;f_id=00db4ee0f0' method='post' id='mc-embedded-subscribe-form' name='mc-embedded-subscribe-form' class='validate' target='_self' novalidate=''>
+                        <div id='mc_embed_signup_scroll'><h3>Keep up with structured generation</h3>
+                        <div class='mc-field-group'><label for='mce-EMAIL'>Email Address </label><input type='email' name='EMAIL' class='required email' id='mce-EMAIL' required='' value=''><span id='mce-EMAIL-HELPERTEXT' class='helper_text'></span></div>
+                        <div id='mce-responses' class='clear'>
+                        <div class='response' id='mce-error-response' style='display: none;'></div>
+                        <div class='response' id='mce-success-response' style='display: none;'></div>
+                        </div><div aria-hidden='true' style='position: absolute; left: -5000px;'><input type='text' name='b_aec344375257ff07dcf9a6ef6_922982b042' tabindex='-1' value=''></div><div class='clear'><input type='submit' name='subscribe' id='mc-embedded-subscribe' class='button' value='Subscribe'></div>
+                </div>
+                </form>
+                </div>
+                </div>
+</div>
+</body>
+</html>
